@@ -1,0 +1,35 @@
+# Build
+target/
+*.class
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Node
+node_modules/
+.next/
+out/
+
+# DB
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+# Logs
+*.log
+*.err.log
+
+# Images
+screenshot.png
+
+# Scripts
+*.ps1

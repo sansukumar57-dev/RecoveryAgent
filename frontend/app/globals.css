@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Wire the next/font CSS variables into Tailwind's font utilities so
+     font-sans / font-mono use the self-hosted fonts. */
+  --font-sans: var(--font-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+}
+
+:root {
+  --background: #0b0f35;
+  --foreground: #e0e0ff;
+  --surface-low: #14183d;
+  --surface-container: #0A0D3D;
+  --surface-high: #23274d;
+  --primary: #bcc2ff;
+  --primary-container: #0029ff;
+  --accent-success: #00D290;
+  --outline-variant: #444557;
+}
+
+body {
+  background-color: #0b0f35;
+  color: #e0e0ff;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+.font-mono-code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #060930;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e3258;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #444557;
+}
+
+/* Material symbols utility */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  vertical-align: middle;
+}

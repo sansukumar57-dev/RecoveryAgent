@@ -1,0 +1,112 @@
+server:
+  port: 8001
+
+spring:
+  application:
+    name: ai-revenue-recovery
+  # Loads key=value pairs from a .env file at startup (optional — app still boots without it).
+  # Looks in the backend folder first, then the repo root. Values there override the
+  # defaults below, so this is where you put your gateway API key.
+  config:
+    import:
+      - optional:file:./.env[.properties]
+      - optional:file:../.env[.properties]
+  datasource:
+    url: jdbc:sqlite:recovery.db
+    driver-class-name: org.sqlite.JDBC
+    username:
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.community.dialect.SQLiteDialect
+        format_sql: false
+
+razorpay:
+  key-id: ${RAZORPAY_KEY_ID:rzp_test_demo}
+  key-secret: ${RAZORPAY_KEY_SECRET:demo_secret}
+  webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:demo_webhook_secret}
+  base-url: ${RAZORPAY_BASE_URL:https://api.razorpay.com/v1}
+  mode: ${RAZORPAY_MODE:test}
+  gateway:
+    enabled: ${RAZORPAY_GATEWAY_ENABLED:false}
+    auto-capture: ${RAZORPAY_AUTO_CAPTURE:false}
+    enable-3ds: ${RAZORPAY_ENABLE_3DS:true}
+    enable-offus: ${RAZORPAY_ENABLE_OFFUS:true}
+    settlement-cycle: ${RAZORPAY_SETTLEMENT_CYCLE:T+2}
+  webhook:
+    events:
+      - payment.captured
+      - payment.failed
+      - payment.authorized
+      - refund.created
+      - refund.processed
+    url: ${RAZORPAY_WEBHOOK_URL:http://localhost:8001/webhooks/razorpay}
+
+llm:
+  provider: ${LLM_PROVIDER:groq}
+  fallback: ${LLM_FALLBACK:nvidia}
+  timeout-ms: ${LLM_TIMEOUT_MS:8000}
+  openrouter:
+    base-url: https://openrouter.ai/api/v1
+    api-key: ${OPENROUTER_API_KEY:}
+    model: openai/gpt-4o-mini
+  groq:
+    base-url: https://api.groq.com/openai/v1
+    api-key: ${GROQ_API_KEY:}
+    model: llama-3.1-70b-versatile
+  nvidia:
+    base-url: https://integrate.api.nvidia.com/v1
+    api-key: ${NVIDIA_API_KEY:}
+    model: meta/llama3-70b-instruct
+
+guardrails:
+  quiet-hours-start: 20
+  quiet-hours-end: 8
+  max-contacts-per-7-days: 3
+  high-value-threshold: 25000
+  discount-max-amount: 2000
+  retry-schedule-hours: [0, 6, 24, 72, 168]
+  salary-cycle-retry-day: 1
+
+app:
+  api-key: ${APP_API_KEY:demo-api-key-123}
+
+# Fixed-window rate limiting (RateLimitFilter). Webhooks are tighter because
+# that surface is unauthenticated.
+security:
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    api-requests-per-minute: ${RATE_LIMIT_API_RPM:300}
+    webhook-requests-per-minute: ${RATE_LIMIT_WEBHOOK_RPM:60}
+    window-ms: ${RATE_LIMIT_WINDOW_MS:60000}
+
+# Monitoring — health/info/metrics only, never env or configprops (they leak secrets).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ai-revenue-recovery
+
+simulation:
+  batch-size: 120
+  window-days: 14
+  seed: 42
+  probability:
+    soft-decline-retry: 0.60
+    soft-decline-generic: 0.35
+    hard-decline-card-link: 0.45
+    hard-decline-retry: 0.05
+    personalized-message-multiplier: 1.15
+    attempt-diminishing-factor: 0.85
+    quiet-hours-violation-penalty: 0.0
+    discount-boost: 0.20
