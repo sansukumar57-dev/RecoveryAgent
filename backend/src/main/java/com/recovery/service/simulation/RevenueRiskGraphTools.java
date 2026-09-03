@@ -2,6 +2,7 @@ package com.recovery.service.simulation;
 
 import com.recovery.domain.Customer;
 import com.recovery.domain.Payment;
+import com.recovery.domain.PaymentStatus;
 import com.recovery.domain.RecoveryCase;
 import com.recovery.repository.CustomerRepository;
 import com.recovery.repository.PaymentRepository;
@@ -64,7 +65,7 @@ public class RevenueRiskGraphTools {
 
         List<RecoveryCase> cases = caseRepo.findAll();
         List<Payment> failedPayments = paymentRepo.findAll().stream()
-                .filter(p -> "FAILED".equalsIgnoreCase(p.getStatus()))
+                .filter(p -> PaymentStatus.isFailed(p.getStatus()))
                 .collect(Collectors.toList());
 
         // per-customer aggregation
@@ -75,16 +76,28 @@ public class RevenueRiskGraphTools {
         Map<Long, String> nameByCustomer = new HashMap<>();
 
         for (Customer c : customerRepo.findAll()) {
-            nameByCustomer.put(c.getId(), c.getName());
+            if (c.getId() != null) {
+                nameByCustomer.put(c.getId(), c.getName() != null ? c.getName() : "Customer #" + c.getId());
+            }
         }
         for (Payment p : failedPayments) {
-            atRiskByCustomer.merge(p.getCustomerId(), (long) p.getAmountMinor(), Long::sum);
-            reasonByCustomer.put(p.getCustomerId(), p.getFailureReason());
-            methodByCustomer.put(p.getCustomerId(), p.getMethod());
-            graph.totalAtRiskMinor += p.getAmountMinor();
+            if (p.getCustomerId() == null) continue;
+            long amt = p.getAmountMinor() != null ? p.getAmountMinor() : 0L;
+            atRiskByCustomer.merge(p.getCustomerId(), amt, Long::sum);
+            if (p.getFailureReason() != null) {
+                String cleanReason = p.getFailureReason();
+                if (cleanReason.contains("Gateway code") || cleanReason.contains("{") || cleanReason.contains("404")) {
+                    cleanReason = "gateway_timeout";
+                }
+                reasonByCustomer.put(p.getCustomerId(), cleanReason);
+            }
+            if (p.getMethod() != null) methodByCustomer.put(p.getCustomerId(), p.getMethod());
+            graph.totalAtRiskMinor += amt;
         }
         for (RecoveryCase k : cases) {
-            riskByCustomer.computeIfAbsent(k.getCustomerId(), k2 -> new ArrayList<>()).add(k.getRiskScore());
+            if (k.getCustomerId() != null && k.getRiskScore() != null) {
+                riskByCustomer.computeIfAbsent(k.getCustomerId(), k2 -> new ArrayList<>()).add(k.getRiskScore());
+            }
         }
 
         // build nodes
@@ -97,8 +110,12 @@ public class RevenueRiskGraphTools {
             node.atRiskMinor = e.getValue();
             node.declineReason = reasonByCustomer.getOrDefault(cid, "unknown");
             node.method = methodByCustomer.getOrDefault(cid, "unknown");
-            List<Double> risks = riskByCustomer.getOrDefault(cid, Collections.singletonList(0.5));
-            node.riskScore = risks.stream().mapToDouble(Double::doubleValue).average().orElse(0.5);
+            List<Double> risks = riskByCustomer.getOrDefault(cid, Collections.emptyList());
+            node.riskScore = risks.stream()
+                    .filter(Objects::nonNull)
+                    .mapToDouble(Double::doubleValue)
+                    .average()
+                    .orElse(0.5);
             nodeMap.put(cid, node);
             graph.nodes.add(node);
         }
@@ -213,10 +230,15 @@ public class RevenueRiskGraphTools {
         if (buckets <= 0) buckets = 12;
         List<RecoveryCase> cases = caseRepo.findAll();
         List<Payment> failed = paymentRepo.findAll().stream()
-                .filter(p -> "FAILED".equalsIgnoreCase(p.getStatus()))
+                .filter(p -> PaymentStatus.isFailed(p.getStatus()))
                 .collect(Collectors.toList());
-        Map<String, Long> atRiskByPayment = failed.stream()
-                .collect(Collectors.toMap(Payment::getPaymentId, p -> (long) p.getAmountMinor(), Long::sum));
+        Map<String, Long> atRiskByPayment = new HashMap<>();
+        for (Payment p : failed) {
+            if (p.getPaymentId() != null) {
+                long amt = p.getAmountMinor() != null ? p.getAmountMinor() : 0L;
+                atRiskByPayment.merge(p.getPaymentId(), amt, Long::sum);
+            }
+        }
 
         List<Long> times = cases.stream().map(RecoveryCase::getDateCreated)
                 .filter(Objects::nonNull).sorted().collect(Collectors.toList());
@@ -225,7 +247,7 @@ public class RevenueRiskGraphTools {
         long min = times.get(0);
         long max = times.get(times.size() - 1);
         long span = Math.max(1, max - min);
-        long step = span / buckets;
+        long step = Math.max(1, span / buckets);
 
         List<Map<String, Object>> out = new ArrayList<>();
         for (int i = 0; i < buckets; i++) {
@@ -235,7 +257,7 @@ public class RevenueRiskGraphTools {
             long count = 0;
             for (RecoveryCase k : cases) {
                 Long t = k.getDateCreated();
-                if (t != null && t >= start && t < end) {
+                if (t != null && t >= start && (i == buckets - 1 ? t <= end : t < end)) {
                     sum += atRiskByPayment.getOrDefault(k.getPaymentId(), 0L);
                     count++;
                 }

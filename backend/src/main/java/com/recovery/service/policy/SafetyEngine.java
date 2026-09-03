@@ -19,6 +19,7 @@ public class SafetyEngine {
     private final RecoveryActionRepository actionRepo;
     private final CustomerRepository customerRepo;
     private final PaymentRepository paymentRepo;
+    private final com.recovery.repository.GatewayConfigRepository configRepo;
 
     // Configurable thresholds (minor units)
     private static final int MAX_RETRIES = 3;
@@ -27,10 +28,11 @@ public class SafetyEngine {
     private static final int HIGH_VALUE_THRESHOLD = 2500000; // ₹25,000
     private static final int DISCOUNT_MAX_AMOUNT = 200000; // ₹2,000
 
-    public SafetyEngine(RecoveryActionRepository actionRepo, CustomerRepository customerRepo, PaymentRepository paymentRepo) {
+    public SafetyEngine(RecoveryActionRepository actionRepo, CustomerRepository customerRepo, PaymentRepository paymentRepo, com.recovery.repository.GatewayConfigRepository configRepo) {
         this.actionRepo = actionRepo;
         this.customerRepo = customerRepo;
         this.paymentRepo = paymentRepo;
+        this.configRepo = configRepo;
     }
 
     public static record SafetyResult(boolean approved, String finalAction, String reason, String ruleId) {}
@@ -57,14 +59,16 @@ public class SafetyEngine {
         }
 
         // 3. High-Value Route / Human Approval (R6)
-        if (payment.getAmountMinor() > HIGH_VALUE_THRESHOLD) {
-            return new SafetyResult(false, "ESCALATE", "Payment amount exceeds auto-execution limit of ₹25,000", "R6_HIGH_VALUE");
+        int highValueThreshold = configRepo.findById("policy.high_value_threshold").map(c -> Integer.parseInt(c.getValue())).orElse(HIGH_VALUE_THRESHOLD);
+        if (payment.getAmountMinor() > highValueThreshold) {
+            return new SafetyResult(false, "ESCALATE", "Payment amount exceeds auto-execution limit of ₹" + (highValueThreshold / 100), "R6_HIGH_VALUE");
         }
 
         // 4. Max Retries Check (R3)
+        int maxRetries = configRepo.findById("policy.max_retries").map(c -> Integer.parseInt(c.getValue())).orElse(MAX_RETRIES);
         if ("RETRY_PAYMENT".equals(proposedAction)) {
-            if (payment.getRetryCount() >= MAX_RETRIES || kase.getAttemptsCount() >= MAX_RETRIES) {
-                return new SafetyResult(false, "CREATE_PAYMENT_LINK", "Payment retry limit exceeded (" + MAX_RETRIES + ")", "R3_MAX_RETRIES");
+            if (payment.getRetryCount() >= maxRetries || kase.getAttemptsCount() >= maxRetries) {
+                return new SafetyResult(false, "CREATE_PAYMENT_LINK", "Payment retry limit exceeded (" + maxRetries + ")", "R3_MAX_RETRIES");
             }
             if ("card_expired".equalsIgnoreCase(payment.getFailureReason())) {
                 return new SafetyResult(false, "CREATE_PAYMENT_LINK", "Cannot auto-retry an expired card", "R3_EXPIRED_CARD");
@@ -82,17 +86,21 @@ public class SafetyEngine {
         }
 
         // 6. Quiet Hours (R1)
-        ZonedDateTime nowKolkata = Instant.now().atZone(ZoneId.of("Asia/Kolkata"));
-        int hour = nowKolkata.getHour();
-        if (hour >= 20 || hour < 8) {
-            // Quiet hours 20:00 to 08:00
-            // Defer messaging or immediate action
-            return new SafetyResult(false, "RETRY_LATER", "Action proposed during quiet hours (20:00 - 08:00). Deferring to 09:30", "R1_QUIET_HOURS");
+        boolean quietHoursEnabled = configRepo.findById("policy.quiet_hours_enabled").map(c -> Boolean.parseBoolean(c.getValue())).orElse(true);
+        if (quietHoursEnabled) {
+            int qStart = configRepo.findById("policy.quiet_hours_start").map(c -> Integer.parseInt(c.getValue())).orElse(20);
+            int qEnd = configRepo.findById("policy.quiet_hours_end").map(c -> Integer.parseInt(c.getValue())).orElse(8);
+            ZonedDateTime nowKolkata = Instant.now().atZone(ZoneId.of("Asia/Kolkata"));
+            int hour = nowKolkata.getHour();
+            if ((qStart > qEnd && (hour >= qStart || hour < qEnd)) || (qStart < qEnd && (hour >= qStart && hour < qEnd))) {
+                return new SafetyResult(false, "RETRY_LATER", "Action proposed during quiet hours (" + qStart + ":00 - " + qEnd + ":00). Deferring to 09:30", "R1_QUIET_HOURS");
+            }
         }
 
         // 7. Discount / Incentive Cap (R5)
+        int maxIncentive = configRepo.findById("policy.max_incentive_percent").map(c -> Integer.parseInt(c.getValue())).orElse(MAX_INCENTIVE_PERCENTAGE);
         if (incentivePercent != null && incentivePercent > 0) {
-            if (incentivePercent > MAX_INCENTIVE_PERCENTAGE) {
+            if (incentivePercent > maxIncentive) {
                 return new SafetyResult(false, proposedAction, "Requested incentive " + incentivePercent + "% exceeds cap of " + MAX_INCENTIVE_PERCENTAGE + "%", "R5_INCENTIVE_CAP");
             }
             int discountValue = (payment.getAmountMinor() * incentivePercent) / 100;

@@ -138,6 +138,13 @@ export function RiskTrendChart({
   const gridLines = [0, 0.25, 0.5, 0.75, 1];
   const active = hover !== null ? points[hover] : null;
 
+  const formatBucketTime = (ts: number) => {
+    const d = new Date(ts);
+    const date = `${d.getMonth() + 1}/${d.getDate()}`;
+    const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return `${date} ${time}`;
+  };
+
   return (
     <div className="space-y-2">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto overflow-visible" role="img" aria-label="Revenue at risk over time">
@@ -192,10 +199,10 @@ export function RiskTrendChart({
         ))}
 
         <text x={PAD.l} y={H - 8} className="fill-[#a79f93]" style={{ fontSize: 9, fontFamily: "monospace" }}>
-          {new Date(points[0].bucketStart).toLocaleDateString()}
+          {formatBucketTime(points[0].bucketStart)}
         </text>
         <text x={W - PAD.r} y={H - 8} textAnchor="end" className="fill-[#a79f93]" style={{ fontSize: 9, fontFamily: "monospace" }}>
-          {new Date(points[points.length - 1].bucketStart).toLocaleDateString()}
+          {formatBucketTime(points[points.length - 1].bucketStart)}
         </text>
       </svg>
 
@@ -365,7 +372,7 @@ export function ConcentrationGauge({ concentration }: { concentration: RiskConce
 export function RiskNetworkGraph({
   clusters,
   format,
-  maxClusters = 6,
+  maxClusters,
 }: {
   clusters: RiskCluster[];
   format: (minor?: number) => string;
@@ -373,10 +380,10 @@ export function RiskNetworkGraph({
 }) {
   const [hover, setHover] = useState<string | null>(null);
 
-  const shown = clusters.slice(0, maxClusters);
+  const shown = maxClusters !== undefined ? clusters.slice(0, maxClusters) : clusters;
   if (!shown.length) return <EmptyGraph label="No correlated-failure cohorts detected." />;
 
-  const cols = Math.min(3, shown.length);
+  const cols = Math.min(3, Math.max(1, shown.length));
   const rows = Math.ceil(shown.length / cols);
   const CELL_W = 220;
   const CELL_H = 168;

@@ -27,9 +27,15 @@ public class ApiKeyFilter implements Filter {
         HttpServletResponse response = (HttpServletResponse) res;
 
         String uri = request.getRequestURI();
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            chain.doFilter(req, res);
+            return;
+        }
         if (uri.startsWith("/api/")) {
             String provided = request.getHeader("X-API-Key");
-            if (provided == null || !provided.equals(apiKey)) {
+            byte[] expectedBytes = apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] providedBytes = provided != null ? provided.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+            if (provided == null || !java.security.MessageDigest.isEqual(expectedBytes, providedBytes)) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 response.setContentType("application/json");
                 response.getWriter().write("{\"status\":\"unauthorized\",\"error\":\"Missing or invalid API key\"}");

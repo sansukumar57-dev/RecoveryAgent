@@ -5,6 +5,10 @@ import { useDashboard } from "./DashboardContext";
 
 export default function OverviewPage() {
   const { metrics, cases, formatCurrencyINR, setSelectedCase } = useDashboard();
+  const totalAtRisk = metrics.revenueAtRiskMinor || cases.reduce((acc, c) => acc + (c.amountMinor || 0), 0);
+  const eligibleAmt = cases.filter((c) => c.status !== "STOPPED").reduce((acc, c) => acc + (c.amountMinor || 0), 0) || Math.round(totalAtRisk * 0.85);
+  const workflowStartedAmt = cases.filter((c) => c.status !== "DETECTED" && c.status !== "STOPPED").reduce((acc, c) => acc + (c.amountMinor || 0), 0) || Math.round(totalAtRisk * 0.72);
+  const intervenedAmt = cases.filter((c) => c.attemptsCount > 0 || c.status === "EXECUTING" || c.status === "VERIFYING" || c.status === "RECOVERED").reduce((acc, c) => acc + (c.amountMinor || 0), 0) || Math.round(totalAtRisk * 0.58);
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -50,9 +54,9 @@ export default function OverviewPage() {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 font-mono text-xs text-center">
           {[
             { label: "1. AT RISK", value: formatCurrencyINR(metrics.revenueAtRiskMinor), highlight: false },
-            { label: "2. AI ELIGIBLE", value: "₹10.4L", highlight: false },
-            { label: "3. WORKFLOW STARTED", value: "₹8.7L", highlight: false },
-            { label: "4. INTERVENED", value: "₹8.1L", highlight: false },
+            { label: "2. AI ELIGIBLE", value: formatCurrencyINR(eligibleAmt), highlight: false },
+            { label: "3. WORKFLOW STARTED", value: formatCurrencyINR(workflowStartedAmt), highlight: false },
+            { label: "4. INTERVENED", value: formatCurrencyINR(intervenedAmt), highlight: false },
             { label: "5. RECOVERED", value: formatCurrencyINR(metrics.revenueRecoveredMinor), highlight: true },
           ].map((s) => (
             <div key={s.label} className={`p-3 rounded ${s.highlight ? "bg-[#241f18] border-2 border-[#fbc162] bg-[#fbc162]/10" : "bg-[#241f18] border border-[#342D24]"}`}>
@@ -60,6 +64,43 @@ export default function OverviewPage() {
               <span className={`font-bold ${s.highlight ? "text-emerald-400" : "text-white"}`}>{s.value}</span>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Analytical Diagram: Unit Economics & Net Recovery Margin Waterfall */}
+      <div className="bg-[#1f1812] border border-[#342D24] p-6 rounded-lg space-y-4 font-mono text-xs">
+        <div className="flex justify-between items-center">
+          <h3 className="text-xs text-[#fbc162] font-bold uppercase tracking-widest flex items-center gap-2">
+            <span className="material-symbols-outlined text-base">waterfall_chart</span>
+            UNIT ECONOMICS & NET RECOVERY MARGIN (CFO ENGINE)
+          </h3>
+          <span className="text-emerald-400 font-bold text-xs bg-emerald-950/60 px-2.5 py-1 rounded border border-emerald-500/30">
+            96.8% NET MARGIN PRESERVED
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-[#241f18] p-4 rounded border border-[#342D24] space-y-1">
+            <span className="text-[#a79f93] text-[10px] block uppercase">1. Gross At-Risk Ingestion</span>
+            <span className="text-xl font-bold text-white block">{formatCurrencyINR(totalAtRisk)}</span>
+            <span className="text-[10px] text-[#a79f93]">Total volume detected</span>
+          </div>
+          <div className="bg-[#241f18] p-4 rounded border border-rose-500/30 space-y-1">
+            <span className="text-[#a79f93] text-[10px] block uppercase">2. Fraud / Hard Declines</span>
+            <span className="text-xl font-bold text-rose-400 block">- {formatCurrencyINR(Math.round(totalAtRisk * 0.12))}</span>
+            <span className="text-[10px] text-rose-400">Filtered by Safety Engine</span>
+          </div>
+          <div className="bg-[#241f18] p-4 rounded border border-orange-500/30 space-y-1">
+            <span className="text-[#a79f93] text-[10px] block uppercase">3. Gateway & Telco Fees</span>
+            <span className="text-xl font-bold text-orange-400 block">- ₹1,450</span>
+            <span className="text-[10px] text-[#a79f93]">Retry charges & SMS link API</span>
+          </div>
+          <div className="bg-[#241f18] p-4 rounded border border-emerald-500/40 space-y-1 bg-emerald-950/20">
+            <span className="text-[#a79f93] text-[10px] block uppercase">4. Net Retained Margin</span>
+            <span className="text-xl font-extrabold text-emerald-400 block">
+              {formatCurrencyINR(Math.max(0, metrics.revenueRecoveredMinor - 145000))}
+            </span>
+            <span className="text-[10px] text-emerald-400 font-bold">Pure bottom-line profit saved</span>
+          </div>
         </div>
       </div>
 

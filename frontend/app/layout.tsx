@@ -22,6 +22,14 @@ export const metadata: Metadata = {
   title: "AURUM RECOVERY | AI Revenue Recovery Engine",
   description:
     "Autonomous Agent for Revenue Risk Detection, AI Diagnosis, Safety Policy Enforcement, and Money Recovery.",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/next.svg", type: "image/svg+xml" },
+    ],
+    shortcut: "/favicon.svg",
+    apple: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

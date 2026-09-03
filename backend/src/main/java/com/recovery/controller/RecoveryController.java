@@ -189,6 +189,78 @@ public class RecoveryController {
         return ResponseEntity.ok(RecoveryCaseDTO.from(kase, customer, payment));
     }
 
+    // 7a. POST /api/recovery/cases/{id}/approve
+    @PostMapping("/recovery/cases/{id}/approve")
+    @Transactional
+    public ResponseEntity<RecoveryCaseDTO> manualApprove(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        RecoveryCase kase = requireCase(id);
+        String notes = body != null && body.containsKey("notes") ? body.get("notes") : "Approved by human operator via dashboard";
+
+        tools.recordAuditEvent(kase.getCaseId(), "HumanReviewer", "HUMAN_APPROVAL", "APPROVE", notes, "APPROVED", "EXECUTED");
+
+        kase.setStatus("DIAGNOSING");
+        kase.setDateUpdated(System.currentTimeMillis());
+        caseRepo.save(kase);
+
+        RecoveryCase updated = orchestrator.stepCase(kase.getCaseId());
+        if (updated == null) updated = kase;
+        Customer customer = customerRepo.findById(updated.getCustomerId()).orElse(null);
+        Payment payment = paymentRepo.findByPaymentId(updated.getPaymentId()).orElse(null);
+        return ResponseEntity.ok(RecoveryCaseDTO.from(updated, customer, payment));
+    }
+
+    // 7b. POST /api/recovery/cases/{id}/reject
+    @PostMapping("/recovery/cases/{id}/reject")
+    @Transactional
+    public ResponseEntity<RecoveryCaseDTO> manualReject(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        RecoveryCase kase = requireCase(id);
+        String reason = body != null && body.containsKey("reason") ? body.get("reason") : "Rejected by human operator via dashboard";
+
+        kase.setStatus(CaseStatus.STOPPED.name());
+        kase.setDateUpdated(System.currentTimeMillis());
+        caseRepo.save(kase);
+
+        tools.recordAuditEvent(kase.getCaseId(), "HumanReviewer", "HUMAN_REJECTION", "REJECT", reason, "DENIED", "EXECUTED");
+
+        Customer customer = customerRepo.findById(kase.getCustomerId()).orElse(null);
+        Payment payment = paymentRepo.findByPaymentId(kase.getPaymentId()).orElse(null);
+        return ResponseEntity.ok(RecoveryCaseDTO.from(kase, customer, payment));
+    }
+
+    // 7c. POST /api/recovery/cases/custom
+    // Allows admin / operator to manually ingest custom failed payment cases
+    @PostMapping("/recovery/cases/custom")
+    @Transactional
+    public ResponseEntity<RecoveryCaseDTO> createCustomCase(@RequestBody Map<String, Object> body) {
+        String customerName = body.containsKey("customerName") ? body.get("customerName").toString() : "Custom Enterprise Client";
+        String plan = body.containsKey("plan") ? body.get("plan").toString() : "Enterprise Annual";
+        int amountMinor = body.containsKey("amountMinor") ? Integer.parseInt(body.get("amountMinor").toString()) : 2500000;
+        String failureReason = body.containsKey("failureReason") ? body.get("failureReason").toString() : "gateway_timeout";
+        String method = body.containsKey("method") ? body.get("method").toString() : "card";
+
+        Customer customer = new Customer();
+        customer.setName(customerName);
+        customer.setPlan(plan);
+        customer.setAmountMinor(amountMinor);
+        customer.setChannelPref("whatsapp");
+        customer = customerRepo.save(customer);
+
+        Payment payment = new Payment();
+        payment.setPaymentId("pay_" + UUID.randomUUID().toString().substring(0, 8));
+        payment.setCustomerId(customer.getId());
+        payment.setAmountMinor(amountMinor);
+        payment.setCurrency("INR");
+        payment.setMethod(method);
+        payment.setOrderId("order_" + UUID.randomUUID().toString().substring(0, 8));
+        payment.setStatus("FAILED");
+        payment.setFailureReason(failureReason);
+        payment.setRetryCount(0);
+        payment = paymentRepo.save(payment);
+
+        RecoveryCase kase = riskAgent.detectAndCreateCase(payment);
+        return ResponseEntity.ok(RecoveryCaseDTO.from(kase, customer, payment));
+    }
+
     // 8. GET /api/recovery/metrics and /api/dashboard
     @GetMapping({"/recovery/metrics", "/dashboard"})
     public ResponseEntity<MetricsDTO> getMetrics() {

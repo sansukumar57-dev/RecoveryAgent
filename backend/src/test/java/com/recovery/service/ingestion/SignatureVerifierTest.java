@@ -20,10 +20,25 @@ public class SignatureVerifierTest {
         return Base64.getEncoder().encodeToString(mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
     }
 
+    private String signHex(String payload, String key) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        byte[] hmac = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hmac) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
     @Test
-    void validSignatureIsAccepted() throws Exception {
+    void validBase64SignatureIsAccepted() throws Exception {
         String payload = "{\"event\":\"payment.failed\"}";
         assertTrue(verifier.verify(payload, sign(payload, secret), secret));
+    }
+
+    @Test
+    void validHexSignatureIsAccepted() throws Exception {
+        String payload = "{\"event\":\"payment.failed\"}";
+        assertTrue(verifier.verify(payload, signHex(payload, secret), secret));
     }
 
     @Test

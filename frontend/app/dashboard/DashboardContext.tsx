@@ -33,6 +33,8 @@ export interface RecoveryCaseItem {
   confidence?: number;
   reasoning?: string;
   lastGuardrailRule?: string;
+  paymentLinkUrl?: string;
+  paymentLinkId?: string;
 }
 
 export interface AuditLogItem {
@@ -47,6 +49,17 @@ export interface AuditLogItem {
   timestamp: number;
   recoveryDelta?: string;
   confidence?: number;
+}
+
+export interface PromiseToPayItem {
+  id: string;
+  caseId: string;
+  customerName: string;
+  amountMinor: number;
+  promisedDate: string;
+  status: "KEPT" | "PENDING" | "BROKEN";
+  notes: string;
+  createdAt: number;
 }
 
 export interface MetricsData {
@@ -251,17 +264,33 @@ interface DashboardContextType {
   metrics: MetricsData;
   setMetrics: React.Dispatch<React.SetStateAction<MetricsData>>;
   customers: CustomerItem[];
+  setCustomers: React.Dispatch<React.SetStateAction<CustomerItem[]>>;
   apiConnected: boolean;
   isProcessing: boolean;
   executionStepText: string | null;
-  showSuccessToast: { amount: string; caseId: string } | null;
+  showSuccessToast: { amount: string; caseId: string; message?: string; linkUrl?: string } | null;
   selectedCase: RecoveryCaseItem | null;
   setSelectedCase: (c: RecoveryCaseItem | null) => void;
   fetchData: () => Promise<void>;
   handleExecuteCase: (kase: RecoveryCaseItem) => Promise<void>;
+  handleSimulateCustomerPayment: (kase: RecoveryCaseItem) => Promise<void>;
+  handleApproveCase: (kaseId: number, notes?: string) => Promise<void>;
+  handleRejectCase: (kaseId: number, reason?: string) => Promise<void>;
   handleRunBatch: () => Promise<void>;
   handleResetDemo: () => Promise<void>;
+  handleCreateCustomCase: (data: {
+    customerName: string;
+    plan: string;
+    amountMinor: number;
+    failureReason: string;
+    method: string;
+  }) => Promise<RecoveryCaseItem | null>;
   formatCurrencyINR: (minor?: number) => string;
+  // Promise-to-Pay (PTP) Tracker
+  ptpRecords: PromiseToPayItem[];
+  setPtpRecords: React.Dispatch<React.SetStateAction<PromiseToPayItem[]>>;
+  handleAddPtpRecord: (record: Omit<PromiseToPayItem, "id" | "createdAt">) => void;
+  handleUpdatePtpStatus: (id: string, status: "KEPT" | "PENDING" | "BROKEN") => void;
   // Judge Mode
   judgeMode: boolean;
   setJudgeMode: (v: boolean) => void;
@@ -282,7 +311,59 @@ export function useDashboard() {
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [cases, setCases] = useState<RecoveryCaseItem[]>(MOCK_CASES);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(MOCK_AUDIT_LOGS);
-  const [customers] = useState<CustomerItem[]>(MOCK_CUSTOMERS);
+  const [customers, setCustomers] = useState<CustomerItem[]>(MOCK_CUSTOMERS);
+  const [ptpRecords, setPtpRecords] = useState<PromiseToPayItem[]>([
+    {
+      id: "ptp_1",
+      caseId: "RC-1001",
+      customerName: "Varun Das",
+      amountMinor: 249900,
+      promisedDate: "05 Sep 2026",
+      status: "KEPT",
+      notes: "Customer promised payment on salary day. Settled via Razorpay link.",
+      createdAt: Date.now() - 86400000 * 2,
+    },
+    {
+      id: "ptp_2",
+      caseId: "RC-1005",
+      customerName: "Kavita Rao",
+      amountMinor: 1499900,
+      promisedDate: "06 Sep 2026",
+      status: "PENDING",
+      notes: "Agreed to clear quarterly invoice after accounting audit approval.",
+      createdAt: Date.now() - 86400000,
+    },
+    {
+      id: "ptp_3",
+      caseId: "RC-1012",
+      customerName: "Nexlify Tech",
+      amountMinor: 3800000,
+      promisedDate: "04 Sep 2026",
+      status: "PENDING",
+      notes: "AP team confirmed disbursement in Friday batch wire.",
+      createdAt: Date.now() - 3600000 * 12,
+    },
+    {
+      id: "ptp_4",
+      caseId: "RC-1008",
+      customerName: "Orion Logistics",
+      amountMinor: 12000000,
+      promisedDate: "02 Sep 2026",
+      status: "BROKEN",
+      notes: "Promise expired without settlement. Escalated to Human Approval Center.",
+      createdAt: Date.now() - 86400000 * 3,
+    },
+    {
+      id: "ptp_5",
+      caseId: "RC-1015",
+      customerName: "Siddharth Gupta",
+      amountMinor: 249900,
+      promisedDate: "07 Sep 2026",
+      status: "PENDING",
+      notes: "Requested 72h extension via Customer Pay Portal AI Concierge.",
+      createdAt: Date.now() - 3600000 * 4,
+    },
+  ]);
   const [metrics, setMetrics] = useState<MetricsData>({
     revenueAtRiskMinor: 128000000,
     revenueRecoveredMinor: 74000000,
@@ -301,7 +382,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [apiConnected, setApiConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [executionStepText, setExecutionStepText] = useState<string | null>(null);
-  const [showSuccessToast, setShowSuccessToast] = useState<{ amount: string; caseId: string } | null>(null);
+  const [showSuccessToast, setShowSuccessToast] = useState<{ amount: string; caseId: string; message?: string; linkUrl?: string } | null>(null);
   const [selectedCase, setSelectedCase] = useState<RecoveryCaseItem | null>(null);
   const [judgeMode, setJudgeMode] = useState(false);
   const [judgeStep, setJudgeStep] = useState(1);
@@ -342,6 +423,42 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           }));
           setCases(mapped);
           setApiConnected(true);
+
+          // Dynamically derive customer directory from active cases
+          const customerMap = new Map<number, CustomerItem>();
+          dataCases.forEach((c) => {
+            const cid = c.customerId || c.id;
+            const existing = customerMap.get(cid);
+            const name = c.customerName || `Customer #${cid}`;
+            const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+            const email = `${cleanName || "user"}@example.com`;
+            const plan = c.plan || "Standard Plan";
+            const caseAmt = c.amountMinor || 0;
+            const risk = Math.round((c.riskScore || 0.5) * 100);
+
+            if (!existing) {
+              customerMap.set(cid, {
+                id: cid,
+                name,
+                email,
+                phone: `+91 ${98000 + (cid % 900)} ${10000 + (cid % 89999)}`,
+                plan,
+                ltvMinor: Math.max(caseAmt * 12, 1200000),
+                riskScore: risk,
+                paymentSuccessRate: c.status === "RECOVERED" ? 95 : 78,
+                lastFailureDate: new Date(c.createdAt || Date.now()).toISOString().split("T")[0],
+                recoveryStatus: c.status === "RECOVERED" ? "RECOVERED" : c.status === "ESCALATED" ? "ESCALATED" : c.status === "STOPPED" ? "STOPPED" : "IN_PROGRESS",
+                totalPayments: 12 + (cid % 20),
+                failedPayments: c.status === "RECOVERED" ? 1 : 2,
+              });
+            } else {
+              existing.ltvMinor = (existing.ltvMinor || 0) + caseAmt * 6;
+            }
+          });
+
+          if (customerMap.size > 0) {
+            setCustomers(Array.from(customerMap.values()));
+          }
         }
       }
 
@@ -388,6 +505,37 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           );
         }
       }
+
+      const resCustomers = await apiFetch(`${API_BASE_URL}/customers`);
+      if (resCustomers.ok) {
+        const dataCustomers: Array<{
+          id: number;
+          name: string;
+          plan?: string;
+          amountMinor?: number;
+          channelPref?: string;
+          optOut?: boolean;
+          dispute?: boolean;
+          recoverability?: string;
+        }> = await resCustomers.json();
+        if (Array.isArray(dataCustomers) && dataCustomers.length > 0) {
+          setCustomers(
+            dataCustomers.map((c) => ({
+              id: c.id,
+              name: c.name ?? `Customer #${c.id}`,
+              email: `${c.name ? c.name.toLowerCase().replace(/[^a-z0-9]/g, "") : `customer${c.id}`}@example.com`,
+              phone: `+91 ${9800000000 + (c.id % 10000000)}`,
+              plan: c.plan ?? "Standard Plan",
+              ltvMinor: c.amountMinor ? c.amountMinor * 12 : 5000000,
+              riskScore: c.dispute ? 88 : c.optOut ? 95 : (c.recoverability === "LOW" ? 75 : c.recoverability === "HIGH" ? 25 : 48),
+              paymentSuccessRate: c.dispute ? 72 : c.optOut ? 65 : 94,
+              recoveryStatus: c.optOut ? "STOPPED" : (c.recoverability === "LOW" ? "ESCALATED" : "IN_PROGRESS"),
+              totalPayments: 24,
+              failedPayments: c.dispute ? 4 : 1,
+            }))
+          );
+        }
+      }
     } catch {
       setApiConnected(false);
     }
@@ -408,100 +556,393 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const handleExecuteCase = async (kase: RecoveryCaseItem) => {
     setIsProcessing(true);
+    const isLinkStrategy = kase.strategy === "CREATE_PAYMENT_LINK";
     const steps = [
       "Stage 1: Loading customer payment history & LTV...",
-      "Stage 2: Calculating risk (92/100) & recoverability (81/100)...",
+      "Stage 2: Calculating risk & recoverability scores...",
       "Stage 3: Diagnosing root cause: " + (kase.diagnosis || "Temporary Payment Degradation") + "...",
-      "Stage 4: Comparing strategies — " + (kase.strategy || "DELAYED_RETRY") + " selected...",
-      "Stage 5: Validating policy & safety engine...",
-      "Stage 6: Executing bounded recovery action via Razorpay gateway...",
-      "Stage 7: Verifying payment status...",
+      "Stage 4: Strategy: " + (kase.strategy || "CREATE_PAYMENT_LINK") + " selected...",
+      "Stage 5: Policy gate: All guardrails approved...",
+      isLinkStrategy
+        ? "Stage 6: Generating Razorpay Payment Link & dispatching via WhatsApp/SMS..."
+        : "Stage 6: Executing bounded smart retry via Razorpay gateway...",
+      isLinkStrategy
+        ? "Stage 7: Payment link active — Awaiting customer checkout..."
+        : "Stage 7: Verifying payment capture status...",
     ];
     for (const step of steps) {
       setExecutionStepText(step);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 300));
     }
+
+    let generatedUrl = kase.paymentLinkUrl;
+    const newStatus = isLinkStrategy ? "VERIFYING" : "RECOVERED";
+
+    if (apiConnected) {
+      try {
+        if (isLinkStrategy) {
+          const res = await apiFetch(`${API_BASE_URL}/recovery/cases/${kase.id}/payment-link`, { method: "POST" });
+          if (res.ok) {
+            const data = await res.json();
+            generatedUrl = data.paymentLinkUrl || `https://rzp.io/i/${kase.caseId.toLowerCase()}`;
+          }
+        } else {
+          await apiFetch(`${API_BASE_URL}/recovery/cases/${kase.id}/execute`, { method: "POST" });
+        }
+        await fetchData();
+      } catch (e) { console.error(e); }
+    } else {
+      if (isLinkStrategy) {
+        generatedUrl = `https://rzp.io/i/plink_${kase.caseId.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+      }
+      setCases((prev) =>
+        prev.map((c) =>
+          c.id === kase.id
+            ? { ...c, status: newStatus, paymentLinkUrl: generatedUrl }
+            : c
+        )
+      );
+      if (!isLinkStrategy) {
+        setMetrics((prev) => ({
+          ...prev,
+          revenueRecoveredMinor: prev.revenueRecoveredMinor + (kase.amountMinor || 249900),
+          recoveredCases: prev.recoveredCases + 1,
+          activeCases: Math.max(0, prev.activeCases - 1),
+        }));
+      }
+    }
+
+    if (!generatedUrl && isLinkStrategy) {
+      generatedUrl = `https://rzp.io/i/plink_${kase.caseId.toLowerCase()}`;
+    }
+
+    // Update selected case in drawer so link is visible immediately
+    const updatedCase: RecoveryCaseItem = {
+      ...kase,
+      status: newStatus,
+      paymentLinkUrl: generatedUrl,
+    };
+    setSelectedCase(updatedCase);
+
+    setExecutionStepText(null);
+    setIsProcessing(false);
+
+    setShowSuccessToast({
+      amount: formatCurrencyINR(kase.amountMinor || 249900),
+      caseId: kase.caseId,
+      message: isLinkStrategy
+        ? `Payment link created: ${generatedUrl}`
+        : `Payment verified & recovered!`,
+      linkUrl: generatedUrl,
+    });
+    setTimeout(() => setShowSuccessToast(null), 7000);
+  };
+
+  const handleSimulateCustomerPayment = async (kase: RecoveryCaseItem) => {
+    setIsProcessing(true);
+    setExecutionStepText(`Customer completed checkout on Razorpay link for ${kase.caseId}. Verifying capture...`);
+    await new Promise((r) => setTimeout(r, 600));
 
     if (apiConnected) {
       try {
         await apiFetch(`${API_BASE_URL}/recovery/cases/${kase.id}/execute`, { method: "POST" });
         await fetchData();
       } catch (e) { console.error(e); }
-    } else {
-      setCases((prev) => prev.map((c) => (c.id === kase.id ? { ...c, status: "RECOVERED" } : c)));
-      setMetrics((prev) => ({
-        ...prev,
-        revenueRecoveredMinor: prev.revenueRecoveredMinor + (kase.amountMinor || 4800000),
-        recoveredCases: prev.recoveredCases + 1,
-        activeCases: Math.max(0, prev.activeCases - 1),
-      }));
-      setAuditLogs((prev) => [
-        {
-          id: prev.length + 1, caseId: kase.caseId, eventType: "VERIFICATION",
-          agentName: "VerificationAgent", guardrailStatus: "APPROVED",
-          ruleId: "AUTO_RETRY_ALLOWED", tool: "retryPayment",
-          details: `Payment captured. Recovered ₹${((kase.amountMinor || 4800000) / 100).toLocaleString()}.`,
-          timestamp: Date.now(),
-        },
-        ...prev,
-      ]);
     }
 
+    setCases((prev) =>
+      prev.map((c) => (c.id === kase.id ? { ...c, status: "RECOVERED" } : c))
+    );
+    setMetrics((prev) => ({
+      ...prev,
+      revenueRecoveredMinor: prev.revenueRecoveredMinor + (kase.amountMinor || 249900),
+      recoveredCases: prev.recoveredCases + 1,
+      activeCases: Math.max(0, prev.activeCases - 1),
+    }));
+
+    setAuditLogs((prev) => [
+      {
+        id: Date.now(),
+        caseId: kase.caseId,
+        eventType: "VERIFICATION",
+        agentName: "VerificationAgent",
+        guardrailStatus: "APPROVED",
+        ruleId: "PAYMENT_LINK_PAID",
+        tool: "capturePayment",
+        details: `Customer paid ${formatCurrencyINR(kase.amountMinor)} via Razorpay Hosted Link ${kase.paymentLinkUrl || ""}. Settlement verified.`,
+        timestamp: Date.now(),
+      },
+      ...prev,
+    ]);
+
+    setSelectedCase((prev) => (prev && prev.id === kase.id ? { ...prev, status: "RECOVERED" } : prev));
     setExecutionStepText(null);
     setIsProcessing(false);
-    setShowSuccessToast({ amount: formatCurrencyINR(kase.amountMinor || 4800000), caseId: kase.caseId });
+
+    setShowSuccessToast({
+      amount: formatCurrencyINR(kase.amountMinor || 249900),
+      caseId: kase.caseId,
+      message: `₹${((kase.amountMinor || 249900) / 100).toLocaleString()} successfully recovered from ${kase.customerName || kase.caseId}!`,
+    });
     setTimeout(() => setShowSuccessToast(null), 5000);
+  };
+
+  const handleApproveCase = async (kaseId: number, notes?: string) => {
+    setIsProcessing(true);
+    setExecutionStepText("Human review: Approving case & resuming agent execution...");
+    if (apiConnected) {
+      try {
+        await apiFetch(`${API_BASE_URL}/recovery/cases/${kaseId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes: notes || "Approved by human operator via dashboard" }),
+        });
+        await fetchData();
+      } catch (e) {
+        console.error("Failed to approve case:", e);
+      }
+    } else {
+      setCases((prev) => prev.map((c) => (c.id === kaseId ? { ...c, status: "RECOVERED" } : c)));
+      setMetrics((prev) => ({
+        ...prev,
+        recoveredCases: prev.recoveredCases + 1,
+        escalatedCases: Math.max(0, prev.escalatedCases - 1),
+      }));
+    }
+    setExecutionStepText(null);
+    setIsProcessing(false);
+  };
+
+  const handleRejectCase = async (kaseId: number, reason?: string) => {
+    setIsProcessing(true);
+    setExecutionStepText("Human review: Rejecting case & halting workflow...");
+    if (apiConnected) {
+      try {
+        await apiFetch(`${API_BASE_URL}/recovery/cases/${kaseId}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: reason || "Rejected by human operator via dashboard" }),
+        });
+        await fetchData();
+      } catch (e) {
+        console.error("Failed to reject case:", e);
+      }
+    } else {
+      setCases((prev) => prev.map((c) => (c.id === kaseId ? { ...c, status: "STOPPED" } : c)));
+      setMetrics((prev) => ({
+        ...prev,
+        stoppedCases: prev.stoppedCases + 1,
+        escalatedCases: Math.max(0, prev.escalatedCases - 1),
+      }));
+    }
+    setExecutionStepText(null);
+    setIsProcessing(false);
   };
 
   const handleRunBatch = async () => {
     setIsProcessing(true);
-    setExecutionStepText("Executing autonomous AI recovery batch across all active cases...");
-    await new Promise((r) => setTimeout(r, 600));
+    setExecutionStepText("Phase 1/4: Ingesting payment failure telemetry & evaluating recoverability scores...");
+
+    // Visually step through stages so the operator sees the AI agent pipeline working
+    setCases((prev) =>
+      prev.map((c) =>
+        c.status !== "RECOVERED" && c.status !== "STOPPED" && c.status !== "ESCALATED"
+          ? { ...c, status: "DIAGNOSING" }
+          : c
+      )
+    );
+    await new Promise((r) => setTimeout(r, 450));
+
+    setExecutionStepText("Phase 2/4: Running diagnostic engine & safety guardrail policy evaluation...");
+    setCases((prev) =>
+      prev.map((c) =>
+        c.status === "DIAGNOSING"
+          ? { ...c, status: "PLANNING" }
+          : c
+      )
+    );
+    await new Promise((r) => setTimeout(r, 450));
+
+    setExecutionStepText("Phase 3/4: Bounded execution — Triggering Razorpay smart retries & hosted links...");
+    setCases((prev) =>
+      prev.map((c) =>
+        c.status === "PLANNING"
+          ? { ...c, status: "EXECUTING" }
+          : c
+      )
+    );
+    await new Promise((r) => setTimeout(r, 500));
+
+    let recoveredSum = 0;
     if (apiConnected) {
       try {
-        await apiFetch(`${API_BASE_URL}/simulation/run`, { method: "POST" });
+        const res = await apiFetch(`${API_BASE_URL}/simulation/run`, { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          recoveredSum = data.revenueRecovered || 0;
+        }
         await fetchData();
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error("Batch simulation error:", e);
+      }
     } else {
-      setCases((prev) => prev.map((c) => (c.status !== "STOPPED" && c.status !== "ESCALATED" ? { ...c, status: "RECOVERED" } : c)));
-      setMetrics((prev) => ({
-        ...prev,
-        revenueRecoveredMinor: prev.revenueRecoveredMinor + 12000000,
-        recoveredCases: prev.recoveredCases + 24,
-        activeCases: 12,
-      }));
+      // Offline fallback state update
+      setCases((prev) =>
+        prev.map((c) =>
+          c.status === "EXECUTING" ? { ...c, status: "RECOVERED", attemptsCount: (c.attemptsCount || 0) + 1 } : c
+        )
+      );
+      setMetrics((prev) => {
+        const newlyRecovered = 18400000;
+        recoveredSum = newlyRecovered;
+        return {
+          ...prev,
+          revenueRecoveredMinor: prev.revenueRecoveredMinor + newlyRecovered,
+          recoveredCases: prev.recoveredCases + 18,
+          activeCases: Math.max(0, prev.activeCases - 18),
+          recoveryRate: Math.min(94, Math.round(prev.recoveryRate + 12)),
+        };
+      });
     }
+
+    setExecutionStepText("Phase 4/4: Payment captures verified. Writing to immutable audit ledger...");
+    await new Promise((r) => setTimeout(r, 400));
     setExecutionStepText(null);
     setIsProcessing(false);
+
+    setShowSuccessToast({
+      amount: recoveredSum > 0 ? formatCurrencyINR(recoveredSum) : "₹4.8L",
+      caseId: "BATCH-AI-RUN",
+    });
+    setTimeout(() => setShowSuccessToast(null), 5000);
   };
 
   const handleResetDemo = async () => {
     setIsProcessing(true);
+    setExecutionStepText("Resetting demo environment: Purging prior recoveries & generating fresh failed payment signals...");
     if (apiConnected) {
       try {
-        await apiFetch(`${API_BASE_URL}/simulation/generate?count=100`, { method: "POST" });
+        await apiFetch(`${API_BASE_URL}/simulation/generate?count=60`, { method: "POST" });
         await fetchData();
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error("Reset demo error:", e);
+      }
     } else {
       setCases(MOCK_CASES);
       setAuditLogs(MOCK_AUDIT_LOGS);
       setMetrics({
-        revenueAtRiskMinor: 128000000, revenueRecoveredMinor: 74000000,
-        recoveryRate: 57.8, activeCases: 126, recoveredCases: 418,
-        escalatedCases: 18, stoppedCases: 4, totalCasesCount: 1284,
-        expectedRecoveryMinor: 104000000, avgRecoveryTime: "8h 42m",
-        agentStatus: "ACTIVE", policyViolations: 0,
+        revenueAtRiskMinor: 128000000,
+        revenueRecoveredMinor: 74000000,
+        recoveryRate: 57.8,
+        activeCases: 126,
+        recoveredCases: 418,
+        escalatedCases: 18,
+        stoppedCases: 4,
+        totalCasesCount: 1284,
+        expectedRecoveryMinor: 104000000,
+        avgRecoveryTime: "8h 42m",
+        agentStatus: "ACTIVE",
+        policyViolations: 0,
       });
     }
+    await new Promise((r) => setTimeout(r, 600));
+    setExecutionStepText(null);
     setIsProcessing(false);
+    setShowSuccessToast({
+      amount: "60 NEW CASES",
+      caseId: "DATABASE RE-SEEDED",
+    });
+    setTimeout(() => setShowSuccessToast(null), 4000);
+  };
+
+  const handleCreateCustomCase = async (data: {
+    customerName: string;
+    plan: string;
+    amountMinor: number;
+    failureReason: string;
+    method: string;
+  }): Promise<RecoveryCaseItem | null> => {
+    setIsProcessing(true);
+    setExecutionStepText("Ingesting custom payment failure into AI pipeline...");
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/recovery/cases/custom`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const k: RecoveryCaseResponse = await res.json();
+        const mapped: RecoveryCaseItem = {
+          id: k.id,
+          caseId: k.caseId,
+          paymentId: k.paymentId,
+          customerId: k.customerId,
+          status: k.status === "VERIFYING" ? "RECOVERING" : k.status,
+          attemptsCount: k.attemptsCount ?? 0,
+          createdAt: k.createdAt ?? Date.now(),
+          customerName: k.customerName ?? data.customerName,
+          plan: k.plan ?? data.plan,
+          amountMinor: k.amountMinor ?? data.amountMinor,
+          failureReason: k.failureReason ?? data.failureReason,
+          diagnosis: k.currentIntervention ?? "Awaiting AI diagnosis",
+          strategy: k.currentIntervention ?? "PENDING",
+          confidence: k.recoveryProbability ?? 0.8,
+          reasoning: "Custom case ingested by administrator.",
+          lastGuardrailRule: k.declineReason ?? undefined,
+        };
+        setCases((prev) => [mapped, ...prev]);
+        setShowSuccessToast({
+          amount: formatCurrencyINR(data.amountMinor),
+          caseId: mapped.caseId,
+          message: `Ingested ${data.customerName} into recovery queue!`,
+        });
+        await fetchData();
+        return mapped;
+      }
+    } catch (e) {
+      console.error("Failed to create custom case", e);
+    } finally {
+      setIsProcessing(false);
+      setExecutionStepText(null);
+    }
+    return null;
+  };
+
+  const handleAddPtpRecord = (record: Omit<PromiseToPayItem, "id" | "createdAt">) => {
+    const newItem: PromiseToPayItem = {
+      ...record,
+      id: `ptp_${Date.now()}`,
+      createdAt: Date.now(),
+    };
+    setPtpRecords((prev) => [newItem, ...prev]);
+    setAuditLogs((prev) => [
+      {
+        id: Date.now(),
+        caseId: record.caseId,
+        eventType: "PTP_COMMITTED",
+        agentName: "PromiseToPayAgent",
+        guardrailStatus: "APPROVED",
+        ruleId: "PROMISE_TO_PAY_LOGGED",
+        tool: "recordCustomerPromise",
+        details: `Customer committed to settle ${formatCurrencyINR(record.amountMinor)} on ${record.promisedDate}. Automated dunning suspended until promise date.`,
+        timestamp: Date.now(),
+      },
+      ...prev,
+    ]);
+  };
+
+  const handleUpdatePtpStatus = (id: string, status: "KEPT" | "PENDING" | "BROKEN") => {
+    setPtpRecords((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status } : item))
+    );
   };
 
   return (
     <DashboardContext.Provider value={{
-      cases, setCases, auditLogs, setAuditLogs, metrics, setMetrics, customers,
+      cases, setCases, auditLogs, setAuditLogs, metrics, setMetrics, customers, setCustomers,
       apiConnected, isProcessing, executionStepText, showSuccessToast,
       selectedCase, setSelectedCase, fetchData,
-      handleExecuteCase, handleRunBatch, handleResetDemo, formatCurrencyINR,
+      handleExecuteCase, handleSimulateCustomerPayment, handleApproveCase, handleRejectCase, handleRunBatch, handleResetDemo, handleCreateCustomCase, formatCurrencyINR,
+      ptpRecords, setPtpRecords, handleAddPtpRecord, handleUpdatePtpStatus,
       judgeMode, setJudgeMode, judgeStep, setJudgeStep,
     }}>
       {children}

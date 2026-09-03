@@ -204,6 +204,7 @@ public class RecoveryOrchestrator {
 
         int safetyCounter = 0;
         while (safetyCounter < 20) {
+            if (kase == null) break;
             String status = kase.getStatus();
             if ("RECOVERED".equals(status) || "ESCALATED".equals(status) || "STOPPED".equals(status) || "FAILED".equals(status)) {
                 break;
