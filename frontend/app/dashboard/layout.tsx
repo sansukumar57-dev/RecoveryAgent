@@ -17,7 +17,7 @@ const NAV_ITEMS = [
   { id: "analytics", href: "/dashboard/analytics", label: "Analytics", icon: "analytics" },
   { id: "audit", href: "/dashboard/audit", label: "Audit Trail", icon: "history" },
   { id: "approvals", href: "/dashboard/approvals", label: "Approvals", icon: "verified_user" },
-  { id: "settings", href: "/dashboard/settings", label: "Settings & Webhooks", icon: "settings" },
+  { id: "settings", href: "/dashboard/settings", label: "Settings & Policies", icon: "tune" },
 ];
 
 function getPageTitle(pathname: string): string {
@@ -32,7 +32,7 @@ function getPageTitle(pathname: string): string {
     analytics: "RECOVERY INTELLIGENCE",
     audit: "IMMUTABLE AUDIT TRAIL",
     approvals: "HUMAN APPROVAL CENTER",
-    settings: "RAZORPAY GATEWAY & SIMULATOR",
+    settings: "PLATFORM ENGINE & POLICY CONTROL CENTER",
   };
   return titles[seg] || "RECOVERY COMMAND CENTER";
 }
